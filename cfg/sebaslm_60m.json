@@ -1,0 +1,18 @@
+{
+  "vocabSize": 16000,
+  "ctxLen": 512,
+  "nLayers": 12,
+  "dModel": 512,
+  "nHeads": 8,
+  "ffMult": 3.0,
+  "dropout": 0.1,
+  "useRmsNorm": true,
+  "useRope": true,
+  "batchTokens": 32768,
+  "lrPeak": 0.001,
+  "weightDecay": 0.1,
+  "betas": [ 0.9, 0.95 ],
+  "warmupSteps": 1500,
+  "maxSteps": 100000,
+  "seed": 42
+}

@@ -1,0 +1,15 @@
+﻿# IDE + build junk
+.vs/
+.vscode/
+.idea/
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.db
+*.opendb
+*.vsidx
+*.pdb
+*.ilk
+*.log
