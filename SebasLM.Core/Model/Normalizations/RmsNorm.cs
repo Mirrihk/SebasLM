@@ -4,7 +4,7 @@ using static TorchSharp.torch.nn;
 
 namespace SebasLM.Core.Model.Normalizations
 {
-    /// <summary>
+    /// <Summary>
     /// RMSNorm (Root Mean Square Layer Normalization).
     /// 
     /// Instead of subtracting the mean (as in LayerNorm),
