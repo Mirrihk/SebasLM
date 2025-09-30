@@ -15,7 +15,6 @@
   <ItemGroup>
     <Folder Include="data\" />
     <Folder Include="SebasLM.Core\Data\" />
-    <Folder Include="SebasLM.Core\Model\" />
     <Folder Include="SebasLM.Core\Train\" />
     <Folder Include="tok\" />
   </ItemGroup>
