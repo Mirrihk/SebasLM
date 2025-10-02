@@ -11,7 +11,7 @@ namespace SebasLM.Core.Model.Blocks
     * 
     * FFN block using SwiGLU Activation.
     * y = Linear2(SwiGLU(Linear1(x))),with dropout after SwiGLU. 
-    * Shapes: [B , T , d] -> [B, T, d] 
+    * Shapes: [B,T,d] -> [B, T, d] 
     *
     */
 
