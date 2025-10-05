@@ -9,6 +9,7 @@ namespace SebasLM.Core.Model.Blocks
     * Self-Attention block.
     * Pre-norm, with residual connection.
     * Shapes: [B,T,d] -> [B, T, d]q
+    * B: batch size
     *
     */
     public sealed class SelfAttention : Module
