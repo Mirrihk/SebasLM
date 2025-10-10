@@ -95,11 +95,13 @@ namespace SebasLM.Train
 
             // --- Optimizer ---
             var optim = torch.optim.AdamW(
-                model.parameters(),
-                lr: 3e-4,
-                betas: (0.9, 0.95),
-                weight_decay: 0.01
-            );
+    model.parameters(),
+    3e-4,   // lr
+    0.9,    // betas1
+    0.95,   // betas2
+    1e-8,   // eps
+    0.01    // weight_decay
+);
 
             // --- Encode corpus; duplicate if too short to form a batch ---
             var data = tok.Encode(corpus, device);
