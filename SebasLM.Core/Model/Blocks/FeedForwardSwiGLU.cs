@@ -1,4 +1,6 @@
+using System;
 using TorchSharp;
+using  TorchSharp.Modules;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
@@ -15,35 +17,40 @@ namespace SebasLM.Core.Model.Blocks
     *
     */
 
-    public sealed class FeedForwardSwiGLU : Module
+    // 1) Inherit the GENERIC Module so `forward` exists
+    public sealed class FeedForwardSwiGLU : Module<Tensor, Tensor>
     {
-        private readonly Module projectIn;
-        private readonly Module projectOut;
-        private readonly Module dropout;
-        private readonly long d;
-        private readonly long hidden;
+        private readonly Module<Tensor, Tensor> projIn;   // Linear -> produces 2x hidden (for gate + value)
+        private readonly Module<Tensor, Tensor> projOut;  // Linear -> back to model dim
 
-        public FeedForwardSwiGLU(string name, long dModel, long hiddenMult, double dropoutProb = 0.0) : base(name)
+        public FeedForwardSwiGLU(long modelDim, long hiddenDim, string name = "ffn_swiglu") : base(name)
         {
-            d = dModel;
-            hidden = hiddenMult * dModel;
-            projectIn = Linear(dModel, 2 * hidden);
-            projectOut = Linear(hidden, dModel);
-            dropout = Dropout(dropoutProb);
-            RegisterComponents();
+            // typical SwiGLU FFN: in -> Linear(2*hidden) -> chunk -> silu(gate)*val -> Linear(out)
+            projIn  = Linear(modelDim, 2 * hiddenDim, bias: true);
+            projOut = Linear(hiddenDim, modelDim, bias: true);
+
+            RegisterComponents(); // 2) always register your submodules
         }
-        public override TorchTensor forward(TorchTensor x)
+
+        // 3) Override forward(Tensor)
+        public override Tensor forward(Tensor x)
         {
-            // x: [B, T, d]
-            var h = projectIn.forward(x); // split last dim into 2 halves
-            var (a, b) = h.split((long)hidden, dim: -1);
+            using var scope = NewDisposeScope();
 
-            // Apply SwiGLU: SiLU(a) * b
-            var y = functional.silu(a) * b;
+            var y = projIn.forward(x);                     // [B, T, 2H] or [N, 2H] depending on shape
+            var chunks = y.chunk(2, dim: -1);              // split into gate/value along last dim
+            var gate = functional.silu(chunks[0]);         // SwiGLU = SiLU(gate) * value
+            var val  = chunks[1];
+            var act  = gate.mul_(val);
 
-            y = projectIn.forward(y);
-            y = dropout.forward(y);
-            return y;
+            var outy = projOut.forward(act);
+            return outy.MoveToOuterDisposeScope();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { projIn?.Dispose(); projOut?.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 }
