@@ -26,9 +26,8 @@ namespace SebasLM.Core.Model.Blocks
         public FeedForwardSwiGLU(long modelDim, long hiddenDim, string name = "ffn_swiglu") : base(name)
         {
             // typical SwiGLU FFN: in -> Linear(2*hidden) -> chunk -> silu(gate)*val -> Linear(out)
-            projIn  = Linear(modelDim, 2 * hiddenDim, bias: true);
-            projOut = Linear(hiddenDim, modelDim, bias: true);
-
+            projIn  = Linear(modelDim, 2 * hiddenDim, hasBias: true);
+            projOut = Linear(hiddenDim, modelDim, hasBias: true);
             RegisterComponents(); // 2) always register your submodules
         }
 
