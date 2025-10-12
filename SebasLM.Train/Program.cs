@@ -18,7 +18,7 @@ namespace SebasLM.Train
     {
         public static Device Best => cuda.is_available() ? CUDA : CPU;
         private static Device CUDA => torch.CUDA;
-        private static Device CPU  => torch.CPU;
+        private static Device CPU => torch.CPU;
     }
 
     // ------------------------------------------------------------
@@ -73,20 +73,18 @@ namespace SebasLM.Train
 
             // --- Tokenizer & corpus ---
             var tok = new TinyCharTokenizer();
-            // Personalize this string or load from a file for a better demo:
             var corpus = "hello from sebaslm — a tiny transformer in c# with torchsharp!\n";
 
-            const int blockSize = 128; // context length
+            const int blockSize = 128; // context length (must match model's maxSeqLen)
             const int batchSize = 16;
 
-            // --- Model -g-
-            // Match TinyGPT ctor: (long vocab, long dModel, int layers, int heads, int maxSeqLen, double dropout=0, double ffnMult=4, string name="tiny_gpt")
-            long   vocab   = tok.VocabSize; // long
-            long   d       = 256;           // long
-            int    heads   = 8;             // int
-            int    layers  = 4;             // int
-            int    maxT    = blockSize;     // int
-            double pDrop   = 0.0;
+            // --- Model ---
+            long vocab = tok.VocabSize; // long
+            long d = 256;           // long
+            int heads = 8;             // int
+            int layers = 4;             // int
+            int maxT = blockSize;     // int
+            double pDrop = 0.0;
             double ffnMult = 4.0;
 
             using var model = new TinyGPT(
@@ -126,8 +124,25 @@ namespace SebasLM.Train
                 // logits: [B,T,V]
                 var logits = model.forward(x);
 
+                // === Hard guard: align time dimension BEFORE loss ===
+                var tLog = (int)logits.shape[1];
+                var tY = (int)y.shape[1];
+                if (tLog != tY)
+                {
+                    var T = Math.Min(tLog, tY);
+                    Console.WriteLine($"SHAPE WARN: cropping logits T={tLog} and y T={tY} to T={T}");
+                    logits = logits.index(new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(0, T), TensorIndex.Ellipsis });
+                    y = y.index(new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(0, T) });
+                }
+
+                // Optional: assert post-crop
+                var nIn = (long)logits.shape[0] * (long)logits.shape[1];
+                var nTgt = (long)y.shape[0] * (long)y.shape[1];
+                if (nIn != nTgt)
+                    throw new InvalidOperationException($"Post-crop mismatch: N_in={nIn} vs N_tgt={nTgt}");
+
                 // Cross-entropy over flattened time+batch
-                var loss = torch.nn.functional.cross_entropy(
+                var loss = functional.cross_entropy(
                     logits.reshape(-1, vocab),
                     y.reshape(-1)
                 );
@@ -148,7 +163,6 @@ namespace SebasLM.Train
             Console.WriteLine("\n=== Generated ===");
             Console.WriteLine(tok.Decode(gen[0]));
         }
-
         // ------------------------------------------------------------
         // Batch sampler: draws random contiguous chunks from 1D token array
         // Returns:
@@ -162,13 +176,22 @@ namespace SebasLM.Train
             var Ys = new System.Collections.Generic.List<Tensor>();
             long N = data.shape[0];
 
+            // Ensure we have enough data for at least one full block + 1 token
+            if (N < block + 1)
+            {
+                throw new ArgumentException($"Data length {N} is too short for block size {block}. Need at least {block + 1} tokens.");
+            }
+
             for (int b = 0; b < batch; b++)
             {
-                int s = rnd.Next(0, (int)Math.Max(1, N - block - 1));
-                int e = s + block;
+                // Sample start position ensuring we have block+1 tokens available
+                int maxStart = (int)(N - block - 1);
+                int s = rnd.Next(0, Math.Max(1, maxStart + 1));
 
-                var xSlice = data.index(new TensorIndex[] { TensorIndex.Slice(s, e) }).unsqueeze(0);
-                var ySlice = data.index(new TensorIndex[] { TensorIndex.Slice(s + 1, e + 1) }).unsqueeze(0);
+                // Extract exactly 'block' tokens for input
+                var xSlice = data.index(new TensorIndex[] { TensorIndex.Slice(s, s + block) }).unsqueeze(0);
+                // Extract exactly 'block' tokens for target (shifted by 1)
+                var ySlice = data.index(new TensorIndex[] { TensorIndex.Slice(s + 1, s + block + 1) }).unsqueeze(0);
 
                 Xs.Add(xSlice);
                 Ys.Add(ySlice);
@@ -178,7 +201,6 @@ namespace SebasLM.Train
             var Y = torch.cat(Ys.ToArray(), dim: 0).to(device).to_type(ScalarType.Int64);
             return (X, Y);
         }
-
         // ------------------------------------------------------------
         // Autoregressive generation
         //   - Starts from 'idx' [B, T0]
