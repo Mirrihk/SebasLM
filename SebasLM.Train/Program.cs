@@ -62,9 +62,9 @@ namespace SebasLM.Train
     // ------------------------------------------------------------
     // Training program (TinyGPT + real text + sampling)
     // ------------------------------------------------------------
-    class Program
+    internal class Program
     {
-        static void Main()
+        private static void Main()
         {
             torch.random.manual_seed(0);
 
@@ -75,33 +75,40 @@ namespace SebasLM.Train
             var tok = new TinyCharTokenizer();
             // Personalize this string or load from a file for a better demo:
             var corpus = "hello from sebaslm — a tiny transformer in c# with torchsharp!\n";
-            const int blockSize = 128;
+
+            const int blockSize = 128; // context length
             const int batchSize = 16;
 
             // --- Model ---
-            // Use tokenizer's vocab and keep a small config for speed.
-            long vocab = tok.VocabSize;
-            long d = 256, heads = 8, layers = 4, maxT = blockSize;
+            // Match TinyGPT ctor: (long vocab, long dModel, int layers, int heads, int maxSeqLen, double dropout=0, double ffnMult=4, string name="tiny_gpt")
+            long   vocab   = tok.VocabSize; // long
+            long   d       = 256;           // long
+            int    heads   = 8;             // int
+            int    layers  = 4;             // int
+            int    maxT    = blockSize;     // int
+            double pDrop   = 0.0;
+            double ffnMult = 4.0;
 
-            var model = new TinyGPT(
-                "sebaslm_tinygpt", // name
-                vocab,             // vocabSize
-                d,                 // dModel
-                heads,             // nHeads
-                layers,            // nLayers
-                maxT,              // max sequence length
-                0.0                // pDrop
+            using var model = new TinyGPT(
+                vocab,    // vocabSize (long)
+                d,        // modelDim  (long)
+                layers,   // numLayers (int)
+                heads,    // numHeads  (int)
+                maxT,     // maxSeqLen (int)
+                pDrop,    // dropout
+                ffnMult,  // ffn multiplier
+                name: "sebaslm_tinygpt"
             ).to(device);
 
             // --- Optimizer ---
-            var optim = torch.optim.AdamW(
-    model.parameters(),
-    3e-4,   // lr
-    0.9,    // betas1
-    0.95,   // betas2
-    1e-8,   // eps
-    0.01    // weight_decay
-);
+            using var optim = torch.optim.AdamW(
+                model.parameters(),
+                3e-4,   // lr
+                0.9,    // betas1
+                0.95,   // betas2
+                1e-8,   // eps
+                0.01    // weight_decay
+            );
 
             // --- Encode corpus; duplicate if too short to form a batch ---
             var data = tok.Encode(corpus, device);
@@ -121,7 +128,7 @@ namespace SebasLM.Train
 
                 // Cross-entropy over flattened time+batch
                 var loss = torch.nn.functional.cross_entropy(
-                    logits.reshape(-1, (long)vocab),
+                    logits.reshape(-1, vocab),
                     y.reshape(-1)
                 );
 
@@ -136,7 +143,7 @@ namespace SebasLM.Train
             model.eval();
             var prompt = "hello";
             var start = tok.Encode(prompt, device).unsqueeze(0); // [1,T]
-            var gen = Generate(model, start, maxNewTokens: 120, topK: 30, temperature: 0.9);
+            var gen = Generate(model, start, maxNewTokens: 120, topK: 30, temperature: 0.9, ctxLen: maxT);
 
             Console.WriteLine("\n=== Generated ===");
             Console.WriteLine(tok.Decode(gen[0]));
@@ -148,7 +155,7 @@ namespace SebasLM.Train
         //   x: [B, block]  inputs
         //   y: [B, block]  next-token targets (shifted by +1)
         // ------------------------------------------------------------
-        static (Tensor x, Tensor y) SampleBatch(Tensor data, int batch, int block, Device device)
+        private static (Tensor x, Tensor y) SampleBatch(Tensor data, int batch, int block, Device device)
         {
             var rnd = new Random();
             var Xs = new System.Collections.Generic.List<Tensor>();
@@ -179,21 +186,19 @@ namespace SebasLM.Train
         //   - Supports temperature and top-k sampling
         // Returns: [B, T0 + maxNewTokens]
         // ------------------------------------------------------------
-        static Tensor Generate(TinyGPT model, Tensor idx, int maxNewTokens, int topK = 0, double temperature = 1.0)
+        private static Tensor Generate(
+            TinyGPT model,
+            Tensor idx,
+            int maxNewTokens,
+            int topK = 0,
+            double temperature = 1.0,
+            int ctxLen = 128)
         {
-            var device = idx.device;
-            var B = idx.shape[0];
-            var T0 = idx.shape[1];
-
             var cur = idx.clone();
 
             for (int step = 0; step < maxNewTokens; step++)
             {
-                // If sequence longer than model's maxT, crop from the right
-                long maxT = (model as dynamic).GetType().GetField("maxT",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance) is var _ ? 0 : 0; // not exposed; we just crop to last 128 by default
-                long ctxLen = 128; // use your TinyGPT maxSeqLen; keep in sync with constructor
+                // Crop context to model window
                 var ctx = cur.shape[1] > ctxLen
                     ? cur.index(new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(-(long)ctxLen, null) })
                     : cur;
@@ -208,9 +213,9 @@ namespace SebasLM.Train
                 // Top-k filter
                 if (topK > 0 && topK < last.shape[last.ndim - 1])
                 {
-                    var (vals, inds) = last.topk(topK, dim: -1);
-                    var minVals = vals.index(new TensorIndex[] { TensorIndex.Ellipsis, topK - 1 }).unsqueeze(-1);
-                    var mask = last.lt(minVals); // logits < kth largest -> mask
+                    var (vals, _) = last.topk(topK, dim: -1);
+                    var kth = vals.index(new TensorIndex[] { TensorIndex.Ellipsis, topK - 1 }).unsqueeze(-1);
+                    var mask = last.lt(kth);
                     var negInf = torch.full_like(last, double.NegativeInfinity);
                     last = torch.where(mask, negInf, last);
                 }

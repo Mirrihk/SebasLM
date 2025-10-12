@@ -1,87 +1,115 @@
+using System;
 using TorchSharp;
+using TorchSharp.Modules;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
-using SebasLM.Core.Model.Normalizations;
 using SebasLM.Core.Model.Blocks;
-using TorchSharp.Modules;
+using SebasLM.Core.Model.Normalizations;
+
 
 namespace SebasLM.Core.Model
 {
-
-    /// <summary>
-    /// TinyGPT: A small GPT-style language model for demonstration and testing.
-    /// /// Features:
-    /// - Embedding layer for token and positional embeddings.
-    /// - Stack of Transformer blocks with self-attention and SwiGLU feed-forward.
-    /// - RMSNorm for normalization.
-    /// - Final linear layer to project to vocabulary size.
-    /// - Causal masking in attention to prevent future token access.
-    /// - Dropout for regularization.
-    /// - Configurable model size via parameters.
-    /// tokens -> tokemEmbed + posEmbed -> [TransformerBlock x N] -> RMSNorm -> lmHead -> logits
-    ///  
-    /// </summary>
-
-    public sealed class TinyGPT : Module
+    public sealed class TinyGPT : Module<Tensor, Tensor>
     {
-        private readonly long vocabSize, dModel, nLayers, nHeads, maxT;
-        private readonly Module tokenEmbed, posEmbed, drop;
-        private readonly ModuleList blocks;
-        private readonly RMSNorm finalNorm;
-        private readonly Module lmHead;
+        private readonly long vocabSize;
+        private readonly long modelDim;
+        private readonly int  numLayers;
+        private readonly int  numHeads;
+        private readonly int  maxSeqLen;
+        private readonly double dropout;
 
-        public TinyGPT(string name, long vocabSize, long dModel = 128, long nLayers = 2, long nHeads = 4, long maxT = 512, double pDrop = 0.1)
+        // Modules
+        private readonly Module<Tensor, Tensor> tokEmb;     // nn.Embedding
+        private readonly Parameter posEmb;                  // learnable positional embeddings
+        private readonly ModuleList<TransformerBlock> blocks;
+        private readonly Module<Tensor, Tensor> lnFinal;    // LayerNorm
+        private readonly Module<Tensor, Tensor> lmHead;     // Linear to vocab
+
+        public TinyGPT(
+            long vocabSize,
+            long modelDim,
+            int  numLayers,
+            int  numHeads,
+            int  maxSeqLen,
+            double dropout = 0.0,
+            double ffnMult = 4.0,               // convenience: compute hidden from mult
+            string name = "tiny_gpt")
             : base(name)
         {
+            if (modelDim % numHeads != 0)
+                throw new ArgumentException("modelDim must be divisible by numHeads.");
+
             this.vocabSize = vocabSize;
-            this.dModel = dModel;
-            this.nLayers = nLayers;
-            this.nHeads = nHeads;
-            this.maxT = maxT;
+            this.modelDim  = modelDim;
+            this.numLayers = numLayers;
+            this.numHeads  = numHeads;
+            this.maxSeqLen = maxSeqLen;
+            this.dropout   = dropout;
 
-            tokenEmbed = Embedding(vocabSize, dModel);
-            posEmbed = Embedding(maxT, dModel);
-            drop = Dropout(pDrop);
+            // 1) Token embedding: indices -> modelDim
+            tokEmb = Embedding(vocabSize, modelDim);
 
-            blocks = new ModuleList();
-            for (int i = 0; i < nLayers; i++)
+            // 2) Positional embedding parameter [maxSeqLen, modelDim]
+            posEmb = Parameter(torch.zeros(new long[] { maxSeqLen, modelDim }));
+
+            // 3) Blocks
+            blocks = new ModuleList<TransformerBlock>();
+            var ffnHidden = (long)Math.Round(ffnMult * modelDim);
+
+            for (int i = 0; i < numLayers; i++)
             {
-                var block = new TransformerBlock($"{name}.block{i}", dModel, nHeads, ffnMult: 4, pAttn: pDrop, pProj: pDrop, pFF: pDrop);
-                blocks.Append(block);
+                blocks.Add(new TransformerBlock(modelDim, numHeads, ffnHidden, dropout: dropout, name: $"block{i}"));
             }
 
-            finalNorm = new RMSNorm($"{name}.rms_final", dModel);
-            lmHead = Linear(dModel, vocabSize);
+            // 4) Final norm + LM head
+            lnFinal = LayerNorm(modelDim);
+            lmHead  = Linear(modelDim, vocabSize, hasBias: false);
 
             RegisterComponents();
         }
 
-        public override TorchTensor forward(TorchTensor tokens)
+        public override Tensor forward(Tensor tokenIds)
         {
-            // tokens: [B,T] long
-            var (B, T) = (tokens.shape[0], tokens.shape[1]);
-            if (T > maxT)
-                throw new ArgumentException($"Input sequence length T={T} exceeds model maxT={maxT}.");
+            using var scope = torch.NewDisposeScope();
+            // tokenIds: [B, T] (dtype: Int64)
 
-            // Token and positional embeddings
-            var tokEmb = tokenEmbed.forward(tokens); // [B,T,dModel]
-            var posIds = torch.arange(0, T, dtype: torch.int64, device: tokens.device).unsqueeze(0).expand(B, T);
-            var posEmb = posEmbed.forward(posIds);   // [B,T,dModel]
+            var B = tokenIds.shape[0];
+            var T = tokenIds.shape[1];
 
-            var x = tokEmb + posEmb;
-            x = drop.forward(x);
+            // [B, T, C]
+            var x = tokEmb.forward(tokenIds);
+
+            // Add positions: broadcast posEmb[0:T]
+            var pos = posEmb.value.slice(0, 0, T);      // [T, C]
+            x = x + pos.unsqueeze(0);                   // [1, T, C] -> broadcast to [B, T, C]
 
             // Transformer blocks
-            foreach (var block in blocks)
+            for (int i = 0; i < numLayers; i++)
             {
-                x = block.forward(x);
+                x = blocks[i].forward(x);
             }
 
-            // Final norm and LM head
-            x = finalNorm.forward(x);  // [B,T,dModel]
-            var logits = lmHead.forward(x); // [B,T,vocabSize]
+            x = lnFinal.forward(x);
 
-            return logits;
+            // Project to vocab
+            var logits = lmHead.forward(x);             // [B, T, vocab]
+            return logits.MoveToOuterDisposeScope();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                tokEmb?.Dispose();
+                posEmb?.Dispose();
+                lnFinal?.Dispose();
+                lmHead?.Dispose();
+                if (blocks is not null)
+                {
+                    foreach (var b in blocks) b?.Dispose();
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 }

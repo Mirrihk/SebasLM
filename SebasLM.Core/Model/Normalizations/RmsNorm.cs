@@ -1,65 +1,52 @@
-﻿using TorchSharp;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
+﻿using System;
+using TorchSharp;
+using TorchSharp.Modules;           // Parameter
+using static TorchSharp.torch;      // Tensor, torch.*
+using static TorchSharp.torch.nn;   // (not strictly needed here, but handy)
 
 namespace SebasLM.Core.Model.Normalizations
 {
-    /// <Summary>
-    /// RMSNorm (Root Mean Square Layer Normalization).
-    /// 
-    /// Instead of subtracting the mean (as in LayerNorm),
-    /// this normalizes only by the Root Mean Square (RMS) of the activations:
-    /// 
-    ///   y = (x / RMS(x)) * weight
-    ///   RMS(x) = sqrt(mean(x^2) + eps)
-    /// 
-    /// where 'weight' is a learnable scale vector (per hidden dim).
-    /// 
-    /// Benefits:
-    ///   - Lighter than LayerNorm (no mean subtraction).
-    ///   - Stable for very deep LLMs (used in LLaMA, Falcon, etc.).
-    ///   - Keeps scale-invariance without affecting mean.
-    /// 
-    /// Shape:
-    ///   Input:  [*, d]  (any leading dims, last dim = hidden size)
-    ///   Output: [*, d]
-    /// </summary>
-    public sealed class RMSNorm : Module
+    // Root Mean Square Layer Norm (no mean-centering), as used in many LLMs.
+    // Normalizes across the last dimension.
+    public sealed class RMSNorm : Module<Tensor, Tensor>
     {
-        private readonly Parameter weight;
+        private readonly long featureDim;
         private readonly double eps;
+        private readonly Parameter weight; // learnable scale (gamma)
 
-        /// <summary>
-        /// Create an RMSNorm layer.
-        /// </summary>
-        /// <param name="name">Module name (for TorchSharp tracking).</param>
-        /// <param name="dim">Hidden size (last dimension of input).</param>
-        /// <param name="eps">Small epsilon for numerical stability (default 1e-6).</param>
-        public RMSNorm(string name, long dim, double eps = 1e-6) : base(name)
+        // normalizedShape == size of last dimension (e.g., modelDim)
+        public RMSNorm(long normalizedShape, double eps = 1e-5, string name = "rmsnorm")
+            : base(name)
         {
+            featureDim = normalizedShape;
             this.eps = eps;
 
-            // Learnable scale parameter, initialized to ones.
-            weight = torch.nn.Parameter(torch.ones(dim, dtype: float32));
-            RegisterComponents();
+            // gamma initialized to ones
+            weight = Parameter(torch.ones(new long[] { featureDim }));
+
+            RegisterComponents(); // important for parameters/buffers registration
         }
 
-        /// <summary>
-        /// Forward pass of RMSNorm.
-        /// </summary>
-        /// <param name="x">Input tensor of shape [*, d].</param>
-        /// <returns>Normalized tensor of shape [*, d].</returns>
         public override Tensor forward(Tensor x)
         {
-            // Compute RMS across last dimension:
-            // RMS(x) = sqrt(mean(x^2, dim=-1) + eps), keep same shape
-            var rms = x.pow(2).mean(dim: -1, keepdim: true).add(eps).sqrt();
+            using var scope = torch.NewDisposeScope();
 
-            // Normalize by RMS
-            var normed = x / rms;
+            // x: [*, featureDim]
+            // rms = sqrt(mean(x^2, dim=-1, keepdim=true) + eps)
+            var ms = torch.mean(x.pow(2), new long[] { -1 }, true);  
+            var rms  = (ms + eps).sqrt_();                   // in-place sqrt is fine here
+            var y    = x / rms;                              // broadcast over last dim
 
-            // Apply learnable scale (broadcasted across last dim)
-            return normed * weight;
+            // scale by learnable gamma (weight)  -> broadcast over last dim
+            var outy = y * weight;
+
+            return outy.MoveToOuterDisposeScope();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { weight?.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 }
