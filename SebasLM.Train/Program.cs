@@ -79,7 +79,7 @@ namespace SebasLM.Train
             const int blockSize = 128; // context length
             const int batchSize = 16;
 
-            // --- Model ---
+            // --- Model -g-
             // Match TinyGPT ctor: (long vocab, long dModel, int layers, int heads, int maxSeqLen, double dropout=0, double ffnMult=4, string name="tiny_gpt")
             long   vocab   = tok.VocabSize; // long
             long   d       = 256;           // long

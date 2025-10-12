@@ -20,7 +20,7 @@ namespace SebasLM.Core.Model
 
         // Modules
         private readonly Module<Tensor, Tensor> tokEmb;     // nn.Embedding
-        private readonly Parameter posEmb;                  // learnable positional embeddings
+        private readonly Module<Tensor, Tensor> posEmb;     // nn.Parameter 
         private readonly ModuleList<TransformerBlock> blocks;
         private readonly Module<Tensor, Tensor> lnFinal;    // LayerNorm
         private readonly Module<Tensor, Tensor> lmHead;     // Linear to vocab
@@ -50,8 +50,7 @@ namespace SebasLM.Core.Model
             tokEmb = Embedding(vocabSize, modelDim);
 
             // 2) Positional embedding parameter [maxSeqLen, modelDim]
-            posEmb = Parameter(torch.zeros(new long[] { maxSeqLen, modelDim }));
-
+            posEmb = Embedding(maxSeqLen, modelDim);
             // 3) Blocks
             blocks = new ModuleList<TransformerBlock>();
             var ffnHidden = (long)Math.Round(ffnMult * modelDim);
@@ -80,9 +79,9 @@ namespace SebasLM.Core.Model
             var x = tokEmb.forward(tokenIds);
 
             // Add positions: broadcast posEmb[0:T]
-            var pos = posEmb.value.slice(0, 0, T);      // [T, C]
-            x = x + pos.unsqueeze(0);                   // [1, T, C] -> broadcast to [B, T, C]
-
+            var positions = torch.arange(T, dtype: ScalarType.Int64, device: tokenIds.device);
+            var pos = posEmb.forward(positions).unsqueeze(0); // [1, T, C]
+            x = x + pos;
             // Transformer blocks
             for (int i = 0; i < numLayers; i++)
             {
