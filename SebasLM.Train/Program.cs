@@ -79,40 +79,40 @@ namespace SebasLM.Train
             const int batchSize = 16;
 
             // --- Model ---
-            long vocab = tok.VocabSize; // long
-            long d = 256;           // long
-            int heads = 8;             // int
-            int layers = 4;             // int
-            int maxT = blockSize;     // int
+            long vocab = tok.VocabSize;
+            long d = 256;
+            int heads = 8;
+            int layers = 4;
+            int maxT = blockSize;
             double pDrop = 0.0;
             double ffnMult = 4.0;
 
             using var model = new TinyGPT(
-                vocab,    // vocabSize (long)
-                d,        // modelDim  (long)
-                layers,   // numLayers (int)
-                heads,    // numHeads  (int)
-                maxT,     // maxSeqLen (int)
-                pDrop,    // dropout
-                ffnMult,  // ffn multiplier
+                vocab,
+                d,
+                layers,
+                heads,
+                maxT,
+                pDrop,
+                ffnMult,
                 name: "sebaslm_tinygpt"
             ).to(device);
 
             // --- Optimizer ---
             using var optim = torch.optim.AdamW(
                 model.parameters(),
-                3e-4,   // lr
-                0.9,    // betas1
-                0.95,   // betas2
-                1e-8,   // eps
-                0.01    // weight_decay
+                3e-4,
+                0.9,
+                0.95,
+                1e-8,
+                0.01
             );
 
-            // --- Encode corpus; ensure minimum length for a full block+1 ---
+            // --- Encode corpus; ensure minimum length ---
             var data = tok.Encode(corpus, device);
-            data = EnsureMinLength(data, blockSize + 1); // guarantees sampler safety
+            data = EnsureMinLength(data, blockSize + 1);
 
-            // --- Tiny training loop (char-level next-token prediction) ---
+            // --- Training loop ---
             int steps = 200;
             model.train();
             for (int step = 1; step <= steps; step++)
@@ -120,10 +120,9 @@ namespace SebasLM.Train
                 var (x, y) = SampleBatch(data, batchSize, blockSize, device);
                 optim.zero_grad();
 
-                // logits: [B,T,V]
                 var logits = model.forward(x);
 
-                // === Hard guard: align time dimension BEFORE loss ===
+                // Align time dimensions
                 var tLog = (int)logits.shape[1];
                 var tY = (int)y.shape[1];
                 if (tLog != tY)
@@ -134,13 +133,11 @@ namespace SebasLM.Train
                     y = y.index(new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(0, T) });
                 }
 
-                // Optional: assert post-crop
                 var nIn = (long)logits.shape[0] * (long)logits.shape[1];
                 var nTgt = (long)y.shape[0] * (long)y.shape[1];
                 if (nIn != nTgt)
                     throw new InvalidOperationException($"Post-crop mismatch: N_in={nIn} vs N_tgt={nTgt}");
 
-                // Cross-entropy over flattened time+batch
                 var loss = functional.cross_entropy(
                     logits.reshape(-1, vocab),
                     y.reshape(-1)
@@ -156,7 +153,7 @@ namespace SebasLM.Train
             // --- Generation demo ---
             model.eval();
             var prompt = "hello";
-            var start = tok.Encode(prompt, device).unsqueeze(0); // [1,T]
+            var start = tok.Encode(prompt, device).unsqueeze(0);
             var gen = Generate(model, start, maxNewTokens: 120, topK: 30, temperature: 0.9, ctxLen: maxT);
 
             Console.WriteLine("\n=== Generated ===");
@@ -164,10 +161,7 @@ namespace SebasLM.Train
         }
 
         // ------------------------------------------------------------
-        // Batch sampler: draws random contiguous chunks from 1D token array
-        // Returns:
-        //   x: [B, block]  inputs
-        //   y: [B, block]  next-token targets (shifted by +1)
+        // SampleBatch
         // ------------------------------------------------------------
         private static (Tensor x, Tensor y) SampleBatch(Tensor data, int batch, int block, Device device)
         {
@@ -176,7 +170,6 @@ namespace SebasLM.Train
             var Ys = new System.Collections.Generic.List<Tensor>();
             long N = data.shape[0];
 
-            // N is guaranteed >= block+1 by EnsureMinLength, but we defensively clamp.
             if (N < block + 1)
                 block = (int)Math.Max(1, N - 1);
 
@@ -197,7 +190,6 @@ namespace SebasLM.Train
             return (X, Y);
         }
 
-        // Ensures data has at least minLen tokens by repeating it end-to-end.
         private static Tensor EnsureMinLength(Tensor data, long minLen)
         {
             var N = data.shape[0];
@@ -210,11 +202,7 @@ namespace SebasLM.Train
         }
 
         // ------------------------------------------------------------
-        // Autoregressive generation
-        //   - Starts from 'idx' [B, T0]
-        //   - Appends tokens one-by-one using model logits
-        //   - Supports temperature and top-k sampling
-        // Returns: [B, T0 + maxNewTokens]
+        // Generate (patched to use index_select)
         // ------------------------------------------------------------
         private static Tensor Generate(
             TinyGPT model,
@@ -228,13 +216,16 @@ namespace SebasLM.Train
 
             for (int step = 0; step < maxNewTokens; step++)
             {
-                // Crop context to model window
                 var ctx = cur.shape[1] > ctxLen
                     ? cur.index(new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(-(long)ctxLen, null) })
                     : cur;
 
                 var logits = model.forward(ctx); // [B, Tctx, V]
-                var last = logits.index(new TensorIndex[] { TensorIndex.Ellipsis, ctx.shape[1] - 1, TensorIndex.Ellipsis }); // [B, V]
+
+                // ✅ SAFE last-step extraction
+                var tLast = logits.shape[1] - 1;
+                var idx1 = torch.tensor(new long[] { tLast }, dtype: ScalarType.Int64, device: logits.device);
+                var last = logits.index_select(1, idx1).squeeze(1); // [B, V]
 
                 if (temperature != 1.0)
                     last = last / temperature;
