@@ -108,10 +108,9 @@ namespace SebasLM.Train
                 0.01    // weight_decay
             );
 
-            // --- Encode corpus; duplicate if too short to form a batch ---
+            // --- Encode corpus; ensure minimum length for a full block+1 ---
             var data = tok.Encode(corpus, device);
-            if (data.shape[0] < blockSize + 1)
-                data = torch.cat(new Tensor[] { data, data }, 0);
+            data = EnsureMinLength(data, blockSize + 1); // guarantees sampler safety
 
             // --- Tiny training loop (char-level next-token prediction) ---
             int steps = 200;
@@ -163,6 +162,7 @@ namespace SebasLM.Train
             Console.WriteLine("\n=== Generated ===");
             Console.WriteLine(tok.Decode(gen[0]));
         }
+
         // ------------------------------------------------------------
         // Batch sampler: draws random contiguous chunks from 1D token array
         // Returns:
@@ -176,21 +176,16 @@ namespace SebasLM.Train
             var Ys = new System.Collections.Generic.List<Tensor>();
             long N = data.shape[0];
 
-            // Ensure we have enough data for at least one full block + 1 token
+            // N is guaranteed >= block+1 by EnsureMinLength, but we defensively clamp.
             if (N < block + 1)
-            {
-                throw new ArgumentException($"Data length {N} is too short for block size {block}. Need at least {block + 1} tokens.");
-            }
+                block = (int)Math.Max(1, N - 1);
 
             for (int b = 0; b < batch; b++)
             {
-                // Sample start position ensuring we have block+1 tokens available
                 int maxStart = (int)(N - block - 1);
                 int s = rnd.Next(0, Math.Max(1, maxStart + 1));
 
-                // Extract exactly 'block' tokens for input
                 var xSlice = data.index(new TensorIndex[] { TensorIndex.Slice(s, s + block) }).unsqueeze(0);
-                // Extract exactly 'block' tokens for target (shifted by 1)
                 var ySlice = data.index(new TensorIndex[] { TensorIndex.Slice(s + 1, s + block + 1) }).unsqueeze(0);
 
                 Xs.Add(xSlice);
@@ -201,6 +196,19 @@ namespace SebasLM.Train
             var Y = torch.cat(Ys.ToArray(), dim: 0).to(device).to_type(ScalarType.Int64);
             return (X, Y);
         }
+
+        // Ensures data has at least minLen tokens by repeating it end-to-end.
+        private static Tensor EnsureMinLength(Tensor data, long minLen)
+        {
+            var N = data.shape[0];
+            if (N >= minLen) return data;
+
+            int reps = (int)Math.Ceiling((double)minLen / N);
+            var copies = new Tensor[reps];
+            for (int i = 0; i < reps; i++) copies[i] = data;
+            return torch.cat(copies, dim: 0);
+        }
+
         // ------------------------------------------------------------
         // Autoregressive generation
         //   - Starts from 'idx' [B, T0]
@@ -228,11 +236,9 @@ namespace SebasLM.Train
                 var logits = model.forward(ctx); // [B, Tctx, V]
                 var last = logits.index(new TensorIndex[] { TensorIndex.Ellipsis, ctx.shape[1] - 1, TensorIndex.Ellipsis }); // [B, V]
 
-                // Temperature
                 if (temperature != 1.0)
                     last = last / temperature;
 
-                // Top-k filter
                 if (topK > 0 && topK < last.shape[last.ndim - 1])
                 {
                     var (vals, _) = last.topk(topK, dim: -1);
@@ -242,11 +248,9 @@ namespace SebasLM.Train
                     last = torch.where(mask, negInf, last);
                 }
 
-                // Sample from distribution
                 var probs = functional.softmax(last, dim: -1);
                 var next = probs.multinomial(1); // [B,1]
 
-                // Append
                 cur = torch.cat(new[] { cur, next }, dim: 1);
             }
 
