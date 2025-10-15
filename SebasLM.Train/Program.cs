@@ -8,6 +8,8 @@ using TorchSharp;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 using SebasLM.Core.Model; // TinyGPT
+using System.IO;
+using SebasLM.Train.Data;
 
 namespace SebasLM.Train
 {
@@ -73,15 +75,18 @@ namespace SebasLM.Train
 
             // --- Tokenizer & corpus ---
             var tok = new TinyCharTokenizer();
-            var corpus = "hello from sebaslm — a tiny transformer in c# with torchsharp!\n";
 
+            // Load corpus from external file
+            string corpus = Corpus.Text;
+
+            // --- Hyperparameters ---
             const int blockSize = 128; // context length (must match model's maxSeqLen)
             const int batchSize = 16;
 
             // --- Model ---
             long vocab = tok.VocabSize;
             long d = 256;
-            int heads = 8;
+            int heads = 4;
             int layers = 4;
             int maxT = blockSize;
             double pDrop = 0.0;

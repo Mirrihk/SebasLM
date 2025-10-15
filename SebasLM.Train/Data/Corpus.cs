@@ -1,4 +1,8 @@
-The world of artificial intelligence is often described as a mirror for human thought — a system that doesn’t simply compute, but reflects. Imagine a machine built not to replace reasoning, but to echo it, to take the essence of how we think and shape it into digital form. That’s the promise behind small language models like TinyGPT: compact, efficient, and personal. They are not trained on billions of parameters like the giants that roam the cloud, but they hold a spark of understanding — a focused mind rather than a vast ocean.
+namespace SebasLM.Train.Data
+{
+    public static class Corpus
+    {
+        public static readonly string Text = @"The world of artificial intelligence is often described as a mirror for human thought — a system that doesn’t simply compute, but reflects. Imagine a machine built not to replace reasoning, but to echo it, to take the essence of how we think and shape it into digital form. That’s the promise behind small language models like TinyGPT: compact, efficient, and personal. They are not trained on billions of parameters like the giants that roam the cloud, but they hold a spark of understanding — a focused mind rather than a vast ocean.
 
 At the heart of any model, no matter the scale, lies language. Words are data, yes, but also meaning, rhythm, and intent. When training a model, you are not just teaching it to repeat phrases; you are teaching it to sense context, tone, and subtlety. A sentence like “It’s fine” could mean satisfaction, frustration, or indifference depending on punctuation and surrounding text. That is what a model must learn to navigate.
 
@@ -90,4 +94,6 @@ Finally, the dataset should close with meta-understanding, helping the model ref
 
 When TinyGPT produces responses, it should aim for clarity, empathy, and relevance. It doesn’t need to know everything; it just needs to know enough to be useful and consistent. The purpose of small models isn’t to compete with giants — it’s to personalize intelligence, to make it accessible, tunable, and even local.
 
-Training TinyGPT, therefore, is like teaching a concise storyteller — one who can answer questions, reason clearly, and adapt tone gracefully. With roughly a thousand carefully chosen words, you can already seed that ability: a miniature mirror of thought, humble yet capable, efficient yet meaningful. And perhaps that’s what the future of AI will look like — not endless size, but focused brilliance.
+Training TinyGPT, therefore, is like teaching a concise storyteller — one who can answer questions, reason clearly, and adapt tone gracefully. With roughly a thousand carefully chosen words, you can already seed that ability: a miniature mirror of thought, humble yet capable, efficient yet meaningful. And perhaps that’s what the future of AI will look like — not endless size, but focused brilliance.";
+    }
+}
